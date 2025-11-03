@@ -1,7 +1,13 @@
 import pickle
 import random
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, Counter
+
+def default_dict_factory():
+    return defaultdict(Counter)
+
+def default_dict_dict_factory():
+    return defaultdict(dict)
 
 with open('models/hmm_model.pkl', 'rb') as f:
     hmm_model = pickle.load(f)
@@ -46,7 +52,7 @@ class HangmanEnv:
         return self.pattern, reward, done
 
 class QLearningAgent:
-    def __init__(self, alpha=0.2, gamma=0.9, epsilon=1.0, epsilon_min=0.05, epsilon_decay=0.996):
+    def __init__(self, alpha=0.15, gamma=0.95, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.9995):
         self.Q = defaultdict(float)
         self.alpha = alpha
         self.gamma = gamma
@@ -57,6 +63,8 @@ class QLearningAgent:
         return (pattern, "".join(sorted(guessed)))
     def choose_action(self, state, pattern, guessed):
         available = [a for a in alphabet if a not in guessed]
+        if not available:
+            return None
         L = len(pattern)
         hmm_probs = {a: 0 for a in available}
         if L in position_probs:
@@ -64,20 +72,24 @@ class QLearningAgent:
                 if ch == "_":
                     for a in available:
                         hmm_probs[a] += position_probs[L][pos].get(a, 0)
+        # Normalize HMM probabilities
+        total_hmm = sum(hmm_probs.values()) + 1e-9
+        hmm_probs = {a: hmm_probs[a]/total_hmm for a in available}
         if random.random() < self.epsilon:
             return random.choice(available)
-        scores = {a: self.Q[(state,a)] + 5*hmm_probs.get(a,0) for a in available}
+        # Increased weight for HMM probabilities (10 instead of 5)
+        scores = {a: self.Q[(state,a)] + 10*hmm_probs.get(a,0) for a in available}
         return max(scores, key=scores.get)
     def update(self, state, action, reward, next_state):
         max_next = max([self.Q[(next_state,a)] for a in alphabet], default=0)
         self.Q[(state,action)] += self.alpha * (reward + self.gamma * max_next - self.Q[(state,action)])
 
-with open('/content/corpus.txt', 'r') as f:
+with open('corpus.txt', 'r') as f:
     words = f.read().splitlines()
 
 env = HangmanEnv(words)
 agent = QLearningAgent()
-episodes = 12000
+episodes = 40000  # Increased from 12000 to 40000 for better learning
 scores = []
 wins = 0
 
@@ -88,6 +100,8 @@ for ep in range(episodes):
     while True:
         state = agent.get_state(pattern, guessed)
         action = agent.choose_action(state, pattern, guessed)
+        if action is None:
+            break
         next_pattern, reward, done = env.step(action)
         next_state = agent.get_state(next_pattern, env.guessed)
         agent.update(state, action, reward, next_state)

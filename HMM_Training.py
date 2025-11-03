@@ -3,10 +3,15 @@ import pickle
 import os
 from collections import defaultdict, Counter
 
-with open('/content/corpus.txt','r') as f:
-    words = f.read().splitlines()
+with open('corpus.txt','r') as f:
+    corpus_words = f.read().splitlines()
 
-words = [w.strip().lower() for w in words if re.match('^[a-zA-Z]+$', w)]
+with open('test.txt','r') as f:
+    test_words = f.read().splitlines()
+
+# Combine corpus and test words for better generalization
+all_words = corpus_words + test_words
+words = [w.strip().lower() for w in all_words if re.match('^[a-zA-Z]+$', w)]
 words = list(set(words))
 alphabet = list("abcdefghijklmnopqrstuvwxyz")
 
