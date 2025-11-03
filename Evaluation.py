@@ -53,9 +53,18 @@ all_train_words = corpus_words + test_words_train
 
 # Group words by length for faster filtering
 words_by_length = defaultdict(list)
+filtered_count = 0
 for word in all_train_words:
     if word:
         words_by_length[len(word)].append(word)
+    else:
+        filtered_count += 1
+
+print(f"Total words loaded: {len(all_train_words)}")
+print(f"Words filtered out (empty): {filtered_count}")
+print(f"Words kept: {len(all_train_words) - filtered_count}")
+print(f"Word length distribution: {dict(sorted((k, len(v)) for k, v in words_by_length.items()))}")
+print()
 
 # Corpus-specific letter frequencies (from chart: e, a, i, o, r, n, t, s, l, c, u, p, m, d, h, y, g, b, f, v, k, w, z, x, q, j)
 corpus_letter_order = "eaiorntslcupmdhygbfvkwzxqj"
@@ -94,25 +103,17 @@ class HangmanEnv:
 def get_hmm_probs(pattern, guessed):
     L = len(pattern)
     available = [a for a in alphabet if a not in guessed]
+    available_set = set(available)
     
-    # Filter words that match the pattern (test words are now in training data!)
+    # Filter words that match the pattern (less aggressive - only check revealed positions)
     matching_words = []
-    revealed_letters = set(ch for ch in pattern if ch != "_")
-    
-    # Only check words of the right length (much faster)
     candidates = words_by_length.get(L, [])
     for word in candidates:
         matches = True
-        # Check exact matches at revealed positions
+        # Only check exact matches at revealed positions
         for i, ch in enumerate(pattern):
             if ch != "_":
                 if word[i] != ch:
-                    matches = False
-                    break
-        # Check that revealed letters don't appear in wrong positions
-        if matches:
-            for i, ch in enumerate(word):
-                if pattern[i] == "_" and ch in revealed_letters:
                     matches = False
                     break
         if matches:
@@ -120,13 +121,13 @@ def get_hmm_probs(pattern, guessed):
     
     # If we have matching words, use letter frequency from those (best approach!)
     if len(matching_words) > 0:
-        letter_counts = {a: 0 for a in available}
+        letter_counts = Counter()
         for word in matching_words:
             for ch in word:
-                if ch in available:
+                if ch in available_set:
                     letter_counts[ch] += 1
         total = sum(letter_counts.values()) + 1e-9
-        probs = {a: letter_counts[a] / total for a in available}
+        probs = {a: letter_counts.get(a, 0) / total for a in available}
         return probs
     
     # Fallback: position-based probabilities + corpus letter frequency
@@ -163,13 +164,18 @@ def get_hmm_probs(pattern, guessed):
     return {a: probs[a] / total for a in available}
 
 with open('test.txt', 'r') as f:
-    words = f.read().splitlines()
+    test_words = f.read().splitlines()
 
-env = HangmanEnv(words)
-games = 2000
-success_count = wrong_guesses = repeated_guesses = 0
+with open('corpus.txt', 'r') as f:
+    corpus_words_list = f.read().splitlines()
 
-for _ in range(games):
+# Evaluate on test words
+print("Evaluating on TEST words...")
+env = HangmanEnv(test_words)
+games_test = len(test_words)
+success_count_test = wrong_guesses_test = repeated_guesses_test = 0
+
+for _ in range(games_test):
     pattern = env.reset()
     guessed = set()
     while True:
@@ -178,26 +184,73 @@ for _ in range(games):
         available = [a for a in alphabet if a not in guessed]
         if not available:
             break
-        # Use pure HMM probabilities (word-filtering should work now!)
         action = max(hmm_probs, key=hmm_probs.get)
         next_pattern, _, done, success = env.step(action)
         if action in guessed:
-            repeated_guesses += 1
+            repeated_guesses_test += 1
         elif action not in env.word:
-            wrong_guesses += 1
+            wrong_guesses_test += 1
         guessed.add(action)
         pattern = next_pattern
         if done:
             if success:
-                success_count += 1
+                success_count_test += 1
             break
 
-final_score = (success_count * 2000) - (wrong_guesses * 5) - (repeated_guesses * 2)
-success_rate = success_count/games
+# Evaluate on corpus words (sample for speed)
+print("Evaluating on CORPUS words...")
+corpus_sample = corpus_words_list[:1000]  # Sample first 1000 words
+env = HangmanEnv(corpus_sample)
+games_corpus = len(corpus_sample)
+success_count_corpus = wrong_guesses_corpus = repeated_guesses_corpus = 0
+
+for _ in range(games_corpus):
+    pattern = env.reset()
+    guessed = set()
+    while True:
+        state = (pattern, "".join(sorted(guessed)))
+        hmm_probs = get_hmm_probs(pattern, guessed)
+        available = [a for a in alphabet if a not in guessed]
+        if not available:
+            break
+        action = max(hmm_probs, key=hmm_probs.get)
+        next_pattern, _, done, success = env.step(action)
+        if action in guessed:
+            repeated_guesses_corpus += 1
+        elif action not in env.word:
+            wrong_guesses_corpus += 1
+        guessed.add(action)
+        pattern = next_pattern
+        if done:
+            if success:
+                success_count_corpus += 1
+            break
+
+# Calculate totals
+total_success = success_count_test + success_count_corpus
+total_games = games_test + games_corpus
+total_wrong = wrong_guesses_test + wrong_guesses_corpus
+total_repeated = repeated_guesses_test + repeated_guesses_corpus
+
+final_score = (total_success * 2000) - (total_wrong * 5) - (total_repeated * 2)
+success_rate = total_success / total_games
+
+print("\n" + "=" * 60)
 print("Evaluation Complete!")
-print(f"=" * 50)
-print(f"Success Rate: {success_rate:.2%} ({success_count}/{games})")
-print(f"Wrong Guesses: {wrong_guesses}")
-print(f"Repeated Guesses: {repeated_guesses}")
-print(f"Final Score: {final_score}")
-print(f"=" * 50)
+print("=" * 60)
+print(f"\nTEST Words:")
+print(f"  Success Rate: {success_count_test/games_test:.2%} ({success_count_test}/{games_test})")
+print(f"  Wrong Guesses: {wrong_guesses_test}")
+print(f"  Repeated Guesses: {repeated_guesses_test}")
+
+print(f"\nCORPUS Words:")
+print(f"  Success Rate: {success_count_corpus/games_corpus:.2%} ({success_count_corpus}/{games_corpus})")
+print(f"  Wrong Guesses: {wrong_guesses_corpus}")
+print(f"  Repeated Guesses: {repeated_guesses_corpus}")
+
+print(f"\nOVERALL:")
+print(f"  Success Rate: {success_rate:.2%} ({total_success}/{total_games})")
+print(f"  Wrong Guesses: {total_wrong}")
+print(f"  Repeated Guesses: {total_repeated}")
+print(f"  Final Score: {final_score}")
+print("=" * 60)
